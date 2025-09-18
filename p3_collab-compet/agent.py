@@ -39,14 +39,13 @@ class Agent:
         self.STATE_SIZE = state_size
         self.ACTION_SIZE = action_size
 
-        self.NOISE_SCALE = 0.1
         self.TAU = 1e-3
-        self.GAMMA = 0.95
+        self.GAMMA = 0.999
         self.ACTOR_LR = 1e-4
         self.CRITIC_LR = 1e-4
 
         self.LEARN_EVERY = 1
-        self.BATCH_SIZE = 1024
+        self.BATCH_SIZE = 512
 
         # Actor
         self.local_actor = Actor(state_size, action_size).to(device)
@@ -74,7 +73,7 @@ class Agent:
         # State Variables
         self.t_step = 0
 
-    def act(self, state):
+    def act(self, state, noise_scale=0.1):
         state = torch.from_numpy(state).float().to(device)
 
         self.local_actor.eval()
@@ -82,7 +81,7 @@ class Agent:
             actions = self.local_actor(state).cpu().data.numpy()
         self.local_actor.train()
 
-        noise = np.random.normal(loc=0.0, scale=self.NOISE_SCALE, size=actions.shape)
+        noise = np.random.normal(loc=0.0, scale=noise_scale, size=actions.shape)
         actions += noise
         actions = np.clip(actions, -1, 1)
         
@@ -141,7 +140,7 @@ class Agent:
         self.local_critic._reset_parameters()
         self.target_critic.load_state_dict(self.local_critic.state_dict())
 
-    def checkpoint(self, i_episode, i_agent, save_dir='./checkpoints'):
+    def save_checkpoint(self, i_episode, i_agent, save_dir='./checkpoints'):
         os.makedirs(save_dir, exist_ok=True)
 
         save_dict = {
@@ -153,7 +152,7 @@ class Agent:
             'target_critic_state_dict': self.target_critic.state_dict(),
             'critic_optimizer_state_dict': self.critic_optimizer.state_dict(),
         }
-        
+
         torch.save(save_dict, os.path.join(save_dir, f'agent-{i_agent}' + f'__episode-{i_episode}.' + '.pt'))
 
     def load_checkpoint(self, checkpoint_path):

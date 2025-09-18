@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from unityagents import UnityEnvironment
 
 from agent import Agent
-from utils import ScoreKeeper, ReplayBuffer
+from utils import ScoreKeeper, ReplayBuffer, NoiseScheduler
 
 
 def train_agent(
@@ -24,16 +24,16 @@ def train_agent(
     env = UnityEnvironment(file_name=unity_env_path, no_graphics=True)
     brain_name = env.brain_names[0]
     # Common Replay Buffer
-    common_replay_buffer = ReplayBuffer(buffer_size=1e+5)
+    common_replay_buffer = ReplayBuffer(buffer_size=1e+6)
     # Agent
     agents = [
         Agent(state_size=state_size, action_size=action_size, replay_buffer=common_replay_buffer),
         Agent(state_size=state_size, action_size=action_size, replay_buffer=common_replay_buffer)
     ]
+    # Noise Scheduler
+    noise_scheduler = NoiseScheduler(start=0.2, end=0.1, decay=0.995)
     # Scorekeeper
     scorekeeper = ScoreKeeper(num_agents=num_agents)
-    # Solved State
-    solved = False
 
     for i_episode in range(1, N_EPISODES+1):
         # ------ Resets ------ #
@@ -42,10 +42,15 @@ def train_agent(
 
         scorekeeper.reset()
 
+        noise_scale = noise_scheduler.step()
+
         # ------ Collect Episode ------ #
         while True:
             # Take Action
-            action = np.stack([agents[i].act(state[i]) for i in range(num_agents)])
+            action = np.stack([
+                agents[i].act(state[i], noise_scale=noise_scale) 
+                for i in range(num_agents)
+            ])
 
             env_info = env.step(action)[brain_name]
             next_state, reward, done = env_info.vector_observations, env_info.rewards, env_info.local_done
@@ -66,19 +71,17 @@ def train_agent(
         
         # ------ Monitoring and Checkpointing ------ #
         # Monitoring
-        solved = scorekeeper.update_episode(i_episode)
-        if solved:
-            for i in range(num_agents):
-                agents[i].save_networks(checkpoint_actor=f'trained_actor-{i}.pt', checkpoint_critic=f'trained_critic-{i}.pt')
+        is_solved = scorekeeper.update_episode(i_episode)
+        if is_solved:
+            for i in range(num_agents): agents[i].save_networks(i_agent=i)
             break
         # Checkpointing
         if i_episode % CHECKPOINT_EVERY== 0:
-            for i in range(num_agents):
-                agents[i].checkpoint(i_episode=i_episode, checkpoint_actor=f'trained_actor-{i}.pt', checkpoint_critic=f'trained_critic-{i}.pt')
+            for i in range(num_agents): agents[i].save_checkpoint(i_episode=i_episode, i_agent=i)
 
     env.close()
 
-    return solved, scorekeeper.scores
+    return is_solved, scorekeeper.scores
 
 
 def plot_scores(scores, save_filename='scores.png'):

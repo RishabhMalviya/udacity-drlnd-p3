@@ -20,21 +20,23 @@ class ScoreKeeper:
     
     def reset(self):
         self.curr_score = np.zeros(self.NUM_AGENTS)
+        self.curr_len = 0
     
     def update_timestep(self, rewards):
         self.curr_score += rewards
+        self.curr_len += 1
     
     def update_episode(self, i_episode):
         score = np.max(self.curr_score)
         self.scores.append(score)
         self.scores_window.append(score)
 
-        self.reset()
-
         return self._check_solved(i_episode)
         
     def _check_solved(self, i_episode):
-        print(f'\rEpisode {i_episode}\t Score: {self.scores[-1]:.2f}', end='', flush=True)
+        print(f'\rEpisode {i_episode}\t Score: {self.scores[-1]:.2f}\t Length: {self.curr_len}', end='', flush=True)
+
+        self.reset()
 
         if i_episode >= self.WINDOW_LEN:
             if i_episode % 10 == 0:
@@ -78,3 +80,21 @@ class ReplayBuffer:
         """Return the current size of internal memory."""
         return len(self.memory)
 
+
+class NoiseScheduler:
+    def __init__(self, start=0.2, end=0.1, decay=0.995):
+        self.start = start
+        self.end = end
+        self.decay = decay
+
+        self.current = start
+
+    def reset(self):
+        self.current = self.start
+
+        return self.current
+
+    def step(self):
+        self.current = max(self.end, self.current * self.decay)
+
+        return self.current
