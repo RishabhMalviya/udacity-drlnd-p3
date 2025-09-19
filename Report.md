@@ -1,42 +1,60 @@
 [//]: # (Image References)
-[image1]: https://raw.githubusercontent.com/RishabhMalviya/udacity-drlnd-p2/refs/heads/20agent/ddpg/p2_continuous-control/scores.png "Scores Plot"
+[image1]: https://raw.githubusercontent.com/RishabhMalviya/udacity-drlnd-p3/refs/heads/master/p3_collab-compet/scores.png "Scores Plot"
 
-# Learning Algorithm - VPG (Failed)
-My first attempt was to implement VPG from first principles (see [this branch](https://github.com/RishabhMalviya/udacity-drlnd-p2/tree/1agent/REINFORCE)), but it failed spectacularly. Nonetheless, I learned a lot about how stochastic neural networks are implemented in PyTorch. Fo policy gradient methods, we need to get the log probabilities of our chosen actions. That means the neural network cannot be output deterministic values. The solution is to have the neural network output means and variances for each of the 4 action dimensions, and then use those to sample from a normal distribution.
+# Learning Algorithm - MADDPG
+MADDPG extends DDPG to multi-agent settings by using centralized critics with decentralized actors. Each agent learns its own policy while accounting for other agents’ behaviors through the critic. This design makes learning more stable and enables effective cooperation and competition in complex multi-agent environments.
 
-## Things I Learned
-- You don't actually need to backpropagate through the chosen actions for VPG, you need to backpropagate through the log probabilities. This means that you don't actually have to use the re-parametrization trick! In terms of PyTorch's distributional API, this means that you can sample the actions using `.sample()` instead of `.rsample()`.
-- When this algorithm was not working on the actual task, I tried training the algorithm on a dummy probe environment, which rewarded the agent the closer it got to a fixed target action (look under the `Training a Distributional NN` in [this notebook](https://github.com/RishabhMalviya/udacity-drlnd-p2/blob/1agent/REINFORCE/p2_continuous-control/ScratchPad.ipynb)). The network was not learning until I amended the policy network to output only means (not variances). After some probing/debugging, I discovered the reason. The policy network would initially output bad actions; to reduce the probabilities of those bad actions, it would quickly learn to increase the variances it outputted. While great for encouraging exploration, it never learned to reduce the vraiances, and this prevented the network from ever learning to correct the means. 
-    - *TL;DR* - Don't try to get the policy network to learn variances. It is better to think of it as an exploration/exploitation control variable, and vary it manually.
+## Hyperparameters
+```python
+TAU = 1e-2
+GAMMA = 1.0
+ACTOR_LR = 5e-4
+CRITIC_LR = 5e-4
 
+LEARN_EVERY = 1
+BATCH_SIZE = 1024
+BUFFER_SIZE = 1e+6
+```
 
-# Learning Algorithm - DDPG (Success)
-Most policy-based methods were based on policy gradients, which required the calculation of log probabilities, and therefore, the use of distributional layers. I decided to switch to DDPG because it allowed the use of deterministic (as opposed to distributional) policy networks. Also, the fact that the benchmark implementation succeeded with DDPG was encouraging, especially since I had already spent several days failing to get VPG to work.
+## Noise Schedule
+Also, the noise schedule was engineered so that the frst 300 episodes work with `0.5` scale noise, and from there on, it decays to `0.1` with a decay rate of `0.995`:
+```python
+class NoiseScheduler:
+    def __init__(self, start=0.5, end=0.1, decay=0.995, num_episodes_before_decay=250):
+        self.start = start
+        self.end = end
+        self.decay = decay
 
-I think of DDPG is as a modified Q-Learning algorithm:
-- It aims to learn the optimal Q-value function, and it does so using all of the tricks from DQNs like target-local networks and Replay Buffers. As the agent converges to the optimal policy, the Replay Buffer will get populated with experiences corresponding to that optimal policy, and the Q-Value network will learn the value functions for that optimal policy.
-- The clever thing in DDPG is that the action-selection is not done from the Q-Value network. It is done using another (policy/actor) neural network. Since the Q-Value network requires states and actions as inputs, we can pass it an action that is calculated by this policy network. And since the policy network is deterministic and differentiable w.r.t the actions, we can backpropagate through it and optimize it!
+        self.num_episodes_before_decay = num_episodes_before_decay
+        self.curr_episode = 1
 
-The training steps for each neural network function as follows:
-- *Q-Value (Critic) Network* - We use TD-estimates to teach the Q-Value network (just as in DQN). The clever thing is that the value for the `next_state` in the TD-target is calculated using the policy network. The Q-Value network gives us values for state-action pairs. But the TD-target requires the value for the state. So, we use the policy network to select the best action for `next_state`, and feed that into the Q-Value network to get the value of the `next_state`. Note that this TD-target is calculated using target networks (not local networks).
-- *Policy (Actor) Network* - This is the most brilliant part of the algorithm in my opinion. We do not use policy gradients or anything to optimize the policy network. We've been passing the policy network's actions into the Q-Value network, right? So all we do is we maximize the output Q-Value. That's it. Simple, yet powerful. *NOTE* - This training step is done only with local (not target) networks.
+        self.current = start        
 
-Finally, the target networks are regularly soft-updated from the local networks.
+    def reset(self):
+        self.current = self.start
 
-## Exploration/Exploitation
-Since the output of the policy network is deterministic, we add some noise to the outputs as a way to implement exploration. We can do this because the noisy actions are being used only to generate experience tuples. The only time we need actual outputs from our policy network (without noise) is during the learning steps; and during those, we re-calculate the actions for each state anyway. 
+    def step(self):
+        self.curr_episode += 1
 
-The original paper used an OU Noise process for encouraging exploration, but I read that stationary zero-mean Gaussian noise was providing similar results. After some experimentation, I set the Gaussian noise's scale (standard deviation) to `0.2`, and kept it fixed throughout training.
+        if self.curr_episode > self.num_episodes_before_decay:
+            self.current = max(self.end, self.current * self.decay)
 
-- I initially thought of using a schedule, where this scale would reduce as training progressed (similar to how we implement a schedule for the epsilon variable in epsilon-greedy action selection in Q-learning), but it turns out that wasn't necessary.
-- It was actually quite important to choose a good value for this hyperparameter. When I had it set lower (at `0.1`), the algorithm was learning very slowly. When I had it set higher (at `0.5`), the agent wasn't learning at all. My intuition is that `0.2` is the sweet spot that facilitates some exploration, but also doesn't introduce so much randomness into the policy network's selected actions that it's outputs become meaningless.
+    def get_noise_scale(self):
+        return self.current if self.curr_episode > self.num_episodes_before_decay else self.start
+```
+
+## Reward Engineering
+When the agents were taking a long time to begin learning (~1000 episodes), I started plotting the length of the episodes. This revealed that up until about episode ~1000, the episodes would run for only ~15 timesteps.
+
+Seeing this, I modified the rewards (that went into the ReplayBuffer). I added a small reward of `0.001` for each timestep of the episode. This encouraged the agents to keep the play going for as long as possible.
+
+But the agents took this too far. I started seeing episodes that were ~1500 timesteps long, with a score of still around `0.3`. So, then I modified the rewards again. The agents would get an extra bonus of `0.001` up until episode 300, but from there on out, they would each get a penalty of `-0.001`. This encouraged the agents to kplay for longer in initial stages of training, and then to win quicker (be more attacking) in later stages of training. 
 
 ## Network Architectures
-I initially tried to keep these neural networks very small (with only one hidden layer). But that didn't work too well, so I added two layers. These were the final architectures used:
-
+Actor:
 ```python
 class Actor(nn.Module):
-    def __init__(self, state_size=33, action_size=4, seed=42, fc1_units=256, fc2_units=128):
+    def __init__(self, state_size=24, action_size=2, seed=42, fc1_units=256, fc2_units=256):
         super(Actor, self).__init__()
 
         self.seed = torch.manual_seed(seed)
@@ -58,11 +76,11 @@ class Actor(nn.Module):
 
         return F.tanh(self.fc3(x))
 ```
-^Notice how the output activation layer is `tanh`. This is because the environment documentation specified that the actions are supposed to be between `-1` and `1`.
 
+Critic:
 ```python
 class Critic(nn.Module):
-    def __init__(self, state_size=33, action_size=4, seed=42, fcs1_units=192, fca1_units=64, fc2_units=128):
+    def __init__(self, state_size=24, action_size=2, seed=42, fcs1_units=192, fca1_units=64, fc2_units=128):
         super(Critic, self).__init__()
 
         self.seed = torch.manual_seed(seed)
@@ -88,32 +106,18 @@ class Critic(nn.Module):
 
         return self.fc3(x)
 ```
-^Notice how there are two input 'heads'. One for the state, and one for the action. This allows the network to reason about each independently before combining the information from both.
 
-## Hyperparameters
-These are all the hyperparameters used.
-- `self.ACTOR_LR = 1e-4`: Learning rate for policy network (with Adam optimizer and zero weight decay)
-- `self.CRITIC_LR = 1e-4`: Learning rate for Q-Value network (with Adam optimizer and zero weight decay)
-- `self.NOISE_SCALE = 0.2`: Standard deviation for the zero-mean Gaussian noise that gets added to the actions during experience collection.
-- `self.TAU = 1e-3`: This is the weight given to the local network during the soft update step that updates the target networks.
-- `self.GAMMA = 0.95`: Discount factor. I think it was beneficial to keep it lower, because the effects of the agent's actions don't affect states so far out into the future.
-- `self.LEARN_EVERY = 1`: After how many timesteps should learning be done.
-- `self.BATCH_SIZE = 512`: How many experience-tuples to sample from the Replay Buffer during training.
+The initiailization of the layer weights was done with "fan-in" variance-scaling uniform initialization:
+```python
+def hidden_init(layer):
+    fan_in = layer.weight.data.size()[0]
+    lim = 1. / np.sqrt(fan_in)
+    return (-lim, lim)
+```
 
-
-## Things I Learned
-- Suprisingly, I observed the biggest jumps in performace when I tuned the batch size and learning frequency for the algorithm. Before finding good values for these hyperparameters (I had the batch size set to `1000`), the algorithm was basically not learning at all.
-- Switching to the 20 agent environment was also extrememly beneficial! This is obvious, since collecting more trajectories reduces variance.
-- One important implementation detail in DDPG is that the local Q-value network does not get updated when we update the local policy network. This is important, because the gradients for the actor.
-- Since DDPG is off-policy, it lends itself to a relatively clean implementations. In VPG, you have to carefully keep track of the log probability tensors during trajectory collection, because these log probabilities are what you use to train the networks during the learning step
-
-
-## Plot of Rewards
+# Plot of Rewards
 
 ![Score Plot][image1]
 
-# References
-1. [OpenAI's Spinning Up - VPG (REINFORCE)](https://spinningup.openai.com/en/latest/algorithms/vpg.html)
-2. [Probe Environments](https://andyljones.com/posts/rl-debugging.html)
-3. [OpenAI's SpinningUp - DDPG](https://spinningup.openai.com/en/latest/algorithms/ddpg.html)
-4. [DDPG Original Paper](https://arxiv.org/pdf/1509.02971)
+# Ideas for Future Work
+
