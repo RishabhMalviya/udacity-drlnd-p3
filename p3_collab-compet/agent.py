@@ -39,13 +39,13 @@ class Agent:
         self.STATE_SIZE = state_size
         self.ACTION_SIZE = action_size
 
-        self.TAU = 1e-3
-        self.GAMMA = 0.999
-        self.ACTOR_LR = 1e-4
-        self.CRITIC_LR = 1e-4
+        self.TAU = 1e-2
+        self.GAMMA = 1.0
+        self.ACTOR_LR = 5e-4
+        self.CRITIC_LR = 5e-4
 
         self.LEARN_EVERY = 1
-        self.BATCH_SIZE = 512
+        self.BATCH_SIZE = 1024
 
         # Actor
         self.local_actor = Actor(state_size, action_size).to(device)
@@ -167,4 +167,6 @@ class Agent:
 
     def save_networks(self, i_agent, checkpoint_actor='actor', checkpoint_critic='critic'):
         torch.save(self.local_actor.state_dict(), checkpoint_actor + f'__agent-{i_agent}' + '.pt')
-        torch.save(self.local_critic.state_dict(), checkpoint_critic + f'__agent-{i_agent}' + '.pt')
+
+    def load_networks(self, i_agent):
+        self.local_actor.load_state_dict(torch.load('actor' + f'__agent-{i_agent}' + '.pt'))

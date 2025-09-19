@@ -6,7 +6,7 @@ import random
 import numpy as np
 
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = "cpu"
 
 
 class ScoreKeeper:
@@ -14,6 +14,7 @@ class ScoreKeeper:
         self.NUM_AGENTS = num_agents
         self.TARGET_SCORE = target_score
         self.WINDOW_LEN = window_len
+        self.LOG_EVERY = 100
 
         self.scores = []
         self.scores_window = deque(maxlen=self.WINDOW_LEN)
@@ -39,7 +40,7 @@ class ScoreKeeper:
         self.reset()
 
         if i_episode >= self.WINDOW_LEN:
-            if i_episode % 10 == 0:
+            if i_episode % self.LOG_EVERY == 0:
                 print(f'\rEpisode {i_episode}\tAverage Score (over past 100 episodes): {np.mean(self.scores_window):.2f}')
             if np.mean(self.scores_window) >= self.TARGET_SCORE:
                 print(f'Environment solved in {i_episode-self.WINDOW_LEN} episodes!\tAverage Score: {np.mean(self.scores_window):.2f}')
@@ -82,19 +83,24 @@ class ReplayBuffer:
 
 
 class NoiseScheduler:
-    def __init__(self, start=0.2, end=0.1, decay=0.995):
+    def __init__(self, start=0.5, end=0.1, decay=0.995, num_episodes_before_decay=250):
         self.start = start
         self.end = end
         self.decay = decay
 
-        self.current = start
+        self.num_episodes_before_decay = num_episodes_before_decay
+        self.curr_episode = 1
+
+        self.current = start        
 
     def reset(self):
         self.current = self.start
 
-        return self.current
-
     def step(self):
-        self.current = max(self.end, self.current * self.decay)
+        self.curr_episode += 1
 
-        return self.current
+        if self.curr_episode > self.num_episodes_before_decay:
+            self.current = max(self.end, self.current * self.decay)
+
+    def get_noise_scale(self):
+        return self.current if self.curr_episode > self.num_episodes_before_decay else self.start

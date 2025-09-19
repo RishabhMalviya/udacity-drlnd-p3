@@ -11,7 +11,7 @@ def hidden_init(layer):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_size=24, action_size=2, seed=42, fc1_units=256, fc2_units=128):
+    def __init__(self, state_size=24, action_size=2, seed=42, fc1_units=256, fc2_units=256):
         super(Actor, self).__init__()
 
         self.seed = torch.manual_seed(seed)
